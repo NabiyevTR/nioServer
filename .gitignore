@@ -1,0 +1,10 @@
+
+.idea/
+
+*.iml
+
+target/classes/
+
+*.properties
+
+pom.xml
