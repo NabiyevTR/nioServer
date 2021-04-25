@@ -1,18 +1,23 @@
 package ru.ntr.nioserver;
 
+import lombok.extern.log4j.Log4j;
+
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
-import java.nio.channels.SelectionKey;
-import java.nio.channels.Selector;
-import java.nio.channels.ServerSocketChannel;
-import java.nio.channels.SocketChannel;
+import java.nio.channels.*;
 import java.nio.charset.StandardCharsets;
 import java.util.Iterator;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 
+@Log4j
 public class NIOServer {
 
+    private final int port = Integer.parseInt(System.getenv("PORT"));
+    private final String serverDir = System.getenv("SERVER_DIR");
+    private ConcurrentMap<SocketChannel, CommandExecutor> executors = new ConcurrentHashMap<>();
     private ServerSocketChannel serverChannel;
     private Selector selector;
 
@@ -21,17 +26,14 @@ public class NIOServer {
         try {
             serverChannel = ServerSocketChannel.open();
             selector = Selector.open();
-            serverChannel.bind(new InetSocketAddress(8189));
+            serverChannel.bind(new InetSocketAddress(port));
             serverChannel.configureBlocking(false);
             serverChannel.register(selector, SelectionKey.OP_ACCEPT);
 
-            System.out.println("Server started...");
+            log.info("Server started on port " + port + ".");
 
             while (serverChannel.isOpen()) {
-                selector.select(); // block
-
-                System.out.println("Keys selected!");
-
+                selector.select();
                 Set<SelectionKey> selectionKeys = selector.selectedKeys();
                 Iterator<SelectionKey> keyIterator = selectionKeys.iterator();
                 while (keyIterator.hasNext()) {
@@ -46,7 +48,7 @@ public class NIOServer {
                 }
             }
         } catch (Exception e) {
-            System.err.println("Server was broken");
+            log.info("Server was broken", e);
         }
     }
 
@@ -84,28 +86,43 @@ public class NIOServer {
 
                 buffer.clear();
             }
-            String message = "from server: " + s.toString();
 
-            System.out.println("received: " + message);
+            String cmd = s.toString();
 
-            Set<SelectionKey> keys = selector.keys();
+            try {
+                CommandExecutor executor = executors.get(channel);
+
+                channel.write(
+                        ByteBuffer.wrap(
+                                executor.execute(cmd).getBytes(StandardCharsets.UTF_8))
+                );
+            } catch (ClosedChannelException e) {
+                executors.remove(channel);
+                log.error("Chanel was closed :", e);
+            }
+        }
+
+            /*Set<SelectionKey> keys = selector.keys();
 
             for (SelectionKey selectionKey : keys) {
                 if (selectionKey.channel() instanceof SocketChannel &&
                         selectionKey.isValid()) {
                     SocketChannel responseChannel = (SocketChannel) selectionKey.channel();
-                    responseChannel.write(ByteBuffer.wrap(message.getBytes(StandardCharsets.UTF_8)));
+                    responseChannel.write(ByteBuffer.wrap(
+                            executor.execute(cmd).getBytes(StandardCharsets.UTF_8)
+                    ));
                 }
-            }
-        } catch (Exception e) {
-            System.err.println("Connection was broken");
+            }*/ catch (Exception e) {
+            log.error("Server terminated due error :", e);
         }
+
     }
 
     private void handleAccept(SelectionKey key) throws IOException {
         SocketChannel channel = serverChannel.accept();
         channel.configureBlocking(false);
         channel.register(selector, SelectionKey.OP_READ);
-        System.out.println("Client accepted!");
+        executors.putIfAbsent(channel, new CommandExecutor(new FileManagerImpl(serverDir)));
+        log.info("Client " + channel.getRemoteAddress() + "accepted.");
     }
 }
